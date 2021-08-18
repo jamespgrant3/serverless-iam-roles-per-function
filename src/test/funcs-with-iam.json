@@ -5,6 +5,7 @@
     "region": "us-east-1",
     "name": "aws",
     "runtime": "python2.7",
+    "iamManagedPolicies": ["arn:aws:iam::aws:policy/CloudWatchLambdaInsightsExecutionRolePolicy"],
     "iamRoleStatements": [
       {
         "Effect": "Allow",
@@ -106,6 +107,16 @@
         "securityGroupIds": ["sg-xxxxxx"],
         "subnetIds": ["subnet-xxxx", "subnet-yyyy"]
       }
+    },
+    "helloPermissionsBoundary": {
+      "handler": "handler.permissionsBoundary",
+      "iamRoleStatements": [],
+      "iamPermissionsBoundary": {
+        "Fn::Sub": "arn:aws:iam::xxxxx:policy/your_permissions_boundary_policy"
+      },
+      "events": [],
+      "name": "test-permissions-boundary-hello",
+      "package": {}
     }
   },
   "resources": {

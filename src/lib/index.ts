@@ -16,6 +16,8 @@ class ServerlessIamPerFunctionPlugin {
   awsPackagePlugin: any;
   defaultInherit: boolean;
 
+  readonly PROVIDER_AWS = 'aws';
+
   /**
    *
    * @param {Serverless} serverless - serverless host object
@@ -24,7 +26,7 @@ class ServerlessIamPerFunctionPlugin {
   constructor(serverless: any, _options?: any) {
     this.serverless = serverless;
 
-    if (this.serverless.service.provider.name !== 'aws') {
+    if (this.serverless.service.provider.name !== this.PROVIDER_AWS) {
       throw new this.serverless.classes.Error(`${PLUGIN_NAME} plugin supports only AWS`);
     }
 
@@ -37,9 +39,8 @@ class ServerlessIamPerFunctionPlugin {
           [PLUGIN_NAME]: {
             type: 'object',
             properties: {
-              defaultInherit: {
-                type: 'boolean',
-              },
+              defaultInherit: { type: 'boolean' },
+              iamGlobalPermissionsBoundary: { $ref: '#/definitions/awsArn' },
             },
             additionalProperties: false,
           },
@@ -50,9 +51,11 @@ class ServerlessIamPerFunctionPlugin {
       // Added: defineFunctionProperties schema extension method
       // https://github.com/serverless/serverless/releases/tag/v2.10.0
       if (this.serverless.configSchemaHandler.defineFunctionProperties) {
-        this.serverless.configSchemaHandler.defineFunctionProperties('providerName', {
+        this.serverless.configSchemaHandler.defineFunctionProperties(this.PROVIDER_AWS, {
           properties: {
+            iamRoleStatementsInherit: { type: 'boolean' },
             iamRoleStatementsName: { type: 'string' },
+            iamPermissionsBoundary: { $ref: '#/definitions/awsArn' },
             iamRoleStatements: { $ref: '#/definitions/awsIamPolicyStatements' },
           },
         });
@@ -297,7 +300,7 @@ class ServerlessIamPerFunctionPlugin {
     // set log statements
     policyStatements[0] = {
       Effect: 'Allow',
-      Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+      Action: ['logs:CreateLogStream', 'logs:CreateLogGroup', 'logs:PutLogEvents'],
       Resource: [
         {
           'Fn::Sub': 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}' +
@@ -341,17 +344,49 @@ class ServerlessIamPerFunctionPlugin {
     const isInherit = functionObject.iamRoleStatementsInherit
       || (this.defaultInherit && functionObject.iamRoleStatementsInherit !== false);
 
-    if (isInherit && !_.isEmpty(this.serverless.service.provider.iamRoleStatements)) { // add global statements
-      for (const s of this.serverless.service.provider.iamRoleStatements) {
+    // Since serverless 2.24.0 provider.iamRoleStatements is deprecated
+    // https://github.com/serverless/serverless/blob/master/CHANGELOG.md#2240-2021-02-16
+    // Support old & new iam statements by checking if `iam` property exists
+    const providerIamRoleStatements = this.serverless.service.provider.iam
+      ? this.serverless.service.provider.iam.role?.statements
+      : this.serverless.service.provider.iamRoleStatements;
+
+    if (isInherit && !_.isEmpty(providerIamRoleStatements)) { // add global statements
+      for (const s of providerIamRoleStatements) {
         policyStatements.push(s);
       }
     }
+
+    const providerIamRoleManagedPolicies = this.serverless.service.provider.iam
+      ? this.serverless.service.provider.iam.role?.managedPolicies
+      : this.serverless.service.provider.iamManagedPolicies;
+
+    if (isInherit && !_.isEmpty(providerIamRoleManagedPolicies)) {
+      for (const s of providerIamRoleManagedPolicies) {
+        functionIamRole.Properties.ManagedPolicyArns.push(s);
+      }
+    }
+
     // add iamRoleStatements
     if (_.isArray(functionObject.iamRoleStatements)) {
       for (const s of functionObject.iamRoleStatements) {
         policyStatements.push(s);
       }
     }
+
+    // add iamPermissionsBoundary
+    const iamPermissionsBoundary = functionObject.iamPermissionsBoundary;
+    const iamGlobalPermissionsBoundary =
+      _.get(this.serverless.service, `custom.${PLUGIN_NAME}.iamGlobalPermissionsBoundary`);
+
+    if (iamPermissionsBoundary || iamGlobalPermissionsBoundary) {
+      functionIamRole.Properties.PermissionsBoundary = iamPermissionsBoundary || iamGlobalPermissionsBoundary;
+    }
+
+    if (iamGlobalPermissionsBoundary) {
+      globalIamRole.Properties.PermissionsBoundary = iamGlobalPermissionsBoundary;
+    }
+
     functionIamRole.Properties.RoleName = functionObject.iamRoleStatementsName
       || this.getFunctionRoleName(functionName);
     const roleResourceName = this.serverless.providers.aws.naming.getNormalizedFunctionName(functionName)
